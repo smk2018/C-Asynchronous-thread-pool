@@ -1,18 +1,18 @@
-#pragma once
+ï»¿#pragma once
 /*
-* ¹¹³É£º
-* 1.¹ÜÀíÕßÏß³Ì -> ×ÓÏß³Ì£¬1¸ö
-*       - ¿ØÖÆ¹¤×÷Ïß³ÌµÄÊıÁ¿£º+/-
-* 2.Èô¸É¹¤×÷Ïß³Ì -> ×ÓÏß³Ì£¬N¸ö
-*       - ´ÓÈÎÎñ¶ÓÁĞÖĞÈ¡ÈÎÎñ£¬²¢´¦Àí
-*       - ÈÎÎñ¶ÓÁĞÎª¿Õ£¬±»×èÈû(±»Ìõ¼ş±äÁ¿×èÈû)
-*       - Ïß³ÌÍ¬²½(»¥³âËø)
-*       - µ±Ç°ÊıÁ¿£¬¿ÕÏĞµÄÏß³ÌÊıÁ¿
-*       - Max/Min Ïß³ÌÊıÁ¿
-* 3.ÈÎÎñ¶ÓÁĞ -> stl -> queue
-*       - »¥³âËø
-*       - Ìõ¼ş±äÁ¿
-* 4.Ïß³Ì³Ø¿ª¹Ø -> bool
+* æ„æˆï¼š
+* 1.ç®¡ç†è€…çº¿ç¨‹ -> å­çº¿ç¨‹ï¼Œ1ä¸ª
+*       - æ§åˆ¶å·¥ä½œçº¿ç¨‹çš„æ•°é‡ï¼š+/-
+* 2.è‹¥å¹²å·¥ä½œçº¿ç¨‹ -> å­çº¿ç¨‹ï¼ŒNä¸ª
+*       - ä»ä»»åŠ¡é˜Ÿåˆ—ä¸­å–ä»»åŠ¡ï¼Œå¹¶å¤„ç†
+*       - ä»»åŠ¡é˜Ÿåˆ—ä¸ºç©ºï¼Œè¢«é˜»å¡(è¢«æ¡ä»¶å˜é‡é˜»å¡)
+*       - çº¿ç¨‹åŒæ­¥(äº’æ–¥é”)
+*       - å½“å‰æ•°é‡ï¼Œç©ºé—²çš„çº¿ç¨‹æ•°é‡
+*       - Max/Min çº¿ç¨‹æ•°é‡
+* 3.ä»»åŠ¡é˜Ÿåˆ— -> stl -> queue
+*       - äº’æ–¥é”
+*       - æ¡ä»¶å˜é‡
+* 4.çº¿ç¨‹æ± å¼€å…³ -> bool
 */
 #include <thread>
 #include <vector>
@@ -20,7 +20,9 @@
 #include <queue>
 #include <functional>
 #include <mutex>
+#include <map>
 #include <condition_variable>
+#include <future>
 using namespace std;
 
 class ThreadPool
@@ -29,21 +31,40 @@ public:
 	ThreadPool(int min = 4, int max = thread::hardware_concurrency());
 	~ThreadPool();
 
-	//Ìí¼ÓÈÎÎñ -> ÈÎÎñ¶ÓÁĞ
-	void addTask(function<void(void)> task);
+	//æ·»åŠ ä»»åŠ¡ -> ä»»åŠ¡é˜Ÿåˆ—
+	void addTask(function<void()> f);
+	template<typename F, typename... Args>
+	auto addTask(F&& f, Args&&... args) -> future<typename result_of<F(Args...)>::type>
+	{
+		// 1.packaged_task
+		// 2. å¾—åˆ°future
+		// 3. ä»»åŠ¡å‡½æ•°æ·»åŠ åˆ°ä»»åŠ¡é˜Ÿåˆ—
+		using return_type = typename result_of<F(Args...)>::type;
+		auto task = make_shared<packaged_task<return_type()>>(bind(forward<F>(f), forward<Args>(args)...));
+		future<return_type> res = task->get_future();
+		{
+			unique_lock<mutex> lock(m_queueMutex);
+			m_tasks.emplace([task]() { (*task)(); });
+		}
+		m_condition.notify_one();
+		return res;
+	}
+
 private:
-	void manager(void);
-	void worker(void);
+	void manager(); 
+	void worker(); 
 private:
 	thread* m_manager;
-	vector<thread> m_workers;
-	atomic<int> m_minThread;
-	atomic<int> m_maxThread;
-	atomic<int> m_curThread;
-	atomic<int> m_idleThread;
-	atomic<int> m_exitThread;
-	atomic<bool> m_stop;
-	queue<function<void(void)>> m_tasks;
-	mutex m_queueMutex;
-	condition_variable m_condition;
+	map<thread::id, thread> m_workers; //å­˜å‚¨å·¥ä½œçº¿ç¨‹
+	vector<thread::id> m_ids; //å­˜å‚¨å·²ç»é€€å‡ºäº†ä»»åŠ¡å‡½æ•°çš„çº¿ç¨‹ID
+	int m_minThread;  //æœ€å°çš„çº¿ç¨‹æ•°é‡
+	int m_maxThread;  //æœ€å¤§çš„çº¿ç¨‹æ•°é‡
+	atomic<int> m_curThread;  //å½“å‰çš„çº¿ç¨‹æ•°é‡
+	atomic<int> m_idleThread; //ç©ºé—²çš„çº¿ç¨‹æ•°é‡
+	atomic<int> m_exitThread; //é€€å‡ºçš„çº¿ç¨‹æ•°é‡
+	atomic<bool> m_stop; //çº¿ç¨‹æ± å¼€å…³
+	queue<function<void()>> m_tasks; //ä»»åŠ¡é˜Ÿåˆ—
+	mutex m_queueMutex; //ä»»åŠ¡é˜Ÿåˆ—çš„äº’æ–¥é”
+	mutex m_idsMutex; //çº¿ç¨‹IDçš„äº’æ–¥é”
+	condition_variable m_condition; //æ¡ä»¶å˜é‡
 };
